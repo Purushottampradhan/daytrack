@@ -5,6 +5,8 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // Always load env from this app folder (not monorepo / sibling quiz97 env).
+  envDir: path.resolve(__dirname),
   base: process.env.VITE_BASE ?? '/',
   plugins: [
     react(),
@@ -31,6 +33,15 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+    },
+  },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:5090',
+        changeOrigin: true,
+      },
     },
   },
 })

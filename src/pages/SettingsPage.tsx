@@ -13,10 +13,9 @@ import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { toast } from 'sonner'
-import { supabase } from '@/lib/supabase'
 
 export function SettingsPage() {
-  const { profile, signOut, isDemo, user } = useAuth()
+  const { profile, signOut, isDemo, user, resetPassword, changePassword: changePasswordApi } = useAuth()
   const saveProfile = useProfileSave()
   const fileRef = useRef<HTMLInputElement>(null)
   const userId = getUserId(user)
@@ -92,11 +91,26 @@ export function SettingsPage() {
   const changePassword = async () => {
     const email = user && 'email' in user ? user.email : null
     if (!email || isDemo) {
-      toast.info('Password change requires Supabase auth')
+      toast.info('Password change requires the DayTrack API')
       return
     }
-    await supabase.auth.resetPasswordForEmail(email)
-    toast.success('Password reset email sent')
+    const currentPassword = window.prompt('Current password')
+    if (currentPassword == null) return
+    const newPassword = window.prompt('New password (min 8 characters)')
+    if (newPassword == null) return
+    const { error } = await changePasswordApi(currentPassword, newPassword)
+    if (error) {
+      toast.error(error)
+      return
+    }
+    toast.success('Password updated')
+  }
+
+  const sendResetHint = async () => {
+    const email = user && 'email' in user ? user.email : null
+    if (!email) return
+    const { error } = await resetPassword(email)
+    if (error) toast.info(error)
   }
 
   return (
@@ -183,7 +197,7 @@ export function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Notifications</CardTitle>
-          <CardDescription>Reminder preferences (email requires Supabase Edge Function setup)</CardDescription>
+          <CardDescription>Reminder preferences (local UI only for now)</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center justify-between">
@@ -237,7 +251,10 @@ export function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           {!isDemo && (
-            <Button variant="outline" onClick={changePassword}>Change Password</Button>
+            <>
+              <Button variant="outline" onClick={changePassword}>Change Password</Button>
+              <Button variant="ghost" onClick={sendResetHint}>Password help</Button>
+            </>
           )}
           <Button variant="destructive" onClick={() => signOut()}>
             <LogOut className="h-4 w-4 mr-1" /> Sign Out
@@ -247,7 +264,7 @@ export function SettingsPage() {
 
       {isDemo && (
         <p className="text-xs text-muted-foreground">
-          Running in demo mode with local storage. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY for cloud sync.
+          Running in demo mode with local storage. Set VITE_API_URL to your Render DayTrack API for cloud sync.
         </p>
       )}
     </div>

@@ -1,8 +1,7 @@
 import { useEffect } from 'react'
-import { useAuth } from '@/contexts/AuthContext'
-import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { useAuth, getUserId } from '@/contexts/AuthContext'
+import { api, isApiConfigured } from '@/lib/api'
 import { localStore } from '@/lib/localStore'
-import { getUserId } from '@/contexts/AuthContext'
 import type { ProfileForm } from '@/lib/validators'
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -31,12 +30,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 export async function saveProfile(userId: string, data: ProfileForm) {
-  if (!isSupabaseConfigured) {
+  if (!isApiConfigured) {
     const existing = localStore.getProfile(userId)
     localStore.saveProfile({ ...existing, ...data, id: userId })
     return
   }
-  await supabase.from('profiles').update(data).eq('id', userId)
+  await api('/api/profiles/me', {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
 }
 
 export function useProfileSave() {

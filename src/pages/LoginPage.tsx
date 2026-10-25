@@ -31,7 +31,7 @@ export function LoginPage() {
           <CardDescription>Sign in to DayTrack</CardDescription>
           {isDemo && (
             <p className="text-xs text-amber-600 bg-amber-500/10 rounded-lg p-2 mt-2">
-              Demo mode — any email/password works locally. Add Supabase keys in .env for production.
+              Demo mode — any email/password works locally. Set VITE_API_URL to your Render API for cloud sync.
             </p>
           )}
         </CardHeader>

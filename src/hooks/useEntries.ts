@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { api, isApiConfigured } from '@/lib/api'
 import { localStore, generateId } from '@/lib/localStore'
 import { getUserId, useAuth } from '@/contexts/AuthContext'
 import type { Entry, EntryStatus } from '@/types'
@@ -13,18 +13,17 @@ export function useEntries(fromDate?: string, toDate?: string) {
     enabled: !!userId,
     queryFn: async () => {
       if (!userId) return []
-      if (!isSupabaseConfigured) {
+      if (!isApiConfigured) {
         let entries = localStore.getEntries(userId)
         if (fromDate) entries = entries.filter((e) => e.log_date >= fromDate)
         if (toDate) entries = entries.filter((e) => e.log_date <= toDate)
         return entries
       }
-      let q = supabase.from('entries').select('*').eq('user_id', userId)
-      if (fromDate) q = q.gte('log_date', fromDate)
-      if (toDate) q = q.lte('log_date', toDate)
-      const { data, error } = await q
-      if (error) throw error
-      return (data ?? []) as Entry[]
+      const params = new URLSearchParams()
+      if (fromDate) params.set('from', fromDate)
+      if (toDate) params.set('to', toDate)
+      const q = params.toString() ? `?${params}` : ''
+      return api<Entry[]>(`/api/entries${q}`)
     },
   })
 }
@@ -47,41 +46,43 @@ export function useEntryMutations() {
       notes?: string | null
       useGrace?: boolean
     }) => {
-      const existing = (!isSupabaseConfigured
-        ? localStore.getEntries(userId)
-        : []
-      ).find((e) => e.trackable_id === input.trackable_id && e.log_date === input.log_date)
+      if (!isApiConfigured) {
+        const existing = localStore
+          .getEntries(userId)
+          .find((e) => e.trackable_id === input.trackable_id && e.log_date === input.log_date)
 
-      if (input.status === 'skipped' && input.useGrace && profile && profile.streak_freezes_remaining > 0) {
-        const updated = { ...profile, streak_freezes_remaining: profile.streak_freezes_remaining - 1 }
-        if (!isSupabaseConfigured) localStore.saveProfile(updated)
-        else await supabase.from('profiles').update({ streak_freezes_remaining: updated.streak_freezes_remaining }).eq('id', userId)
-        await refreshProfile()
-      }
+        if (input.status === 'skipped' && input.useGrace && profile && profile.streak_freezes_remaining > 0) {
+          const updated = { ...profile, streak_freezes_remaining: profile.streak_freezes_remaining - 1 }
+          localStore.saveProfile(updated)
+          await refreshProfile()
+        }
 
-      const entry: Entry = {
-        id: existing?.id ?? generateId(),
-        trackable_id: input.trackable_id,
-        user_id: userId,
-        log_date: input.log_date,
-        status: input.status,
-        value: null,
-        notes: input.notes ?? null,
-        created_at: existing?.created_at ?? new Date().toISOString(),
-      }
-
-      if (!isSupabaseConfigured) {
+        const entry: Entry = {
+          id: existing?.id ?? generateId(),
+          trackable_id: input.trackable_id,
+          user_id: userId,
+          log_date: input.log_date,
+          status: input.status,
+          value: null,
+          notes: input.notes ?? null,
+          created_at: existing?.created_at ?? new Date().toISOString(),
+        }
         localStore.saveEntry(entry)
         return entry
       }
 
-      const { data, error } = await supabase
-        .from('entries')
-        .upsert(entry, { onConflict: 'trackable_id,log_date' })
-        .select()
-        .single()
-      if (error) throw error
-      return data as Entry
+      const entry = await api<Entry>('/api/entries/upsert', {
+        method: 'POST',
+        body: JSON.stringify({
+          trackable_id: input.trackable_id,
+          log_date: input.log_date,
+          status: input.status,
+          notes: input.notes ?? null,
+          use_grace: Boolean(input.useGrace),
+        }),
+      })
+      if (input.useGrace) await refreshProfile()
+      return entry
     },
     onMutate: async (input) => {
       await qc.cancelQueries({ queryKey: ['entries'] })

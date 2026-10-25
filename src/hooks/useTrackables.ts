@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { api, isApiConfigured } from '@/lib/api'
 import { localStore, generateId } from '@/lib/localStore'
 import { getUserId, useAuth } from '@/contexts/AuthContext'
 import type { Trackable } from '@/types'
@@ -13,15 +13,12 @@ export function useTrackables(includeArchived = false) {
     enabled: !!userId,
     queryFn: async () => {
       if (!userId) return []
-      if (!isSupabaseConfigured) {
+      if (!isApiConfigured) {
         const all = localStore.getTrackables(userId)
         return includeArchived ? all : all.filter((t) => !t.archived)
       }
-      let q = supabase.from('trackables').select('*').eq('user_id', userId).order('sort_order')
-      if (!includeArchived) q = q.eq('archived', false)
-      const { data, error } = await q
-      if (error) throw error
-      return (data ?? []) as Trackable[]
+      const q = includeArchived ? '?include_archived=true' : ''
+      return api<Trackable[]>(`/api/trackables${q}`)
     },
   })
 }
@@ -35,61 +32,66 @@ export function useTrackableMutations() {
 
   const create = useMutation({
     mutationFn: async (input: Omit<Trackable, 'id' | 'user_id' | 'created_at'>) => {
-      const trackable: Trackable = {
-        ...input,
-        id: generateId(),
-        user_id: userId,
-        created_at: new Date().toISOString(),
-      }
-      if (!isSupabaseConfigured) {
+      if (!isApiConfigured) {
+        const trackable: Trackable = {
+          ...input,
+          id: generateId(),
+          user_id: userId,
+          created_at: new Date().toISOString(),
+        }
         localStore.saveTrackable(trackable)
         return trackable
       }
-      const { data, error } = await supabase.from('trackables').insert(trackable).select().single()
-      if (error) throw error
-      return data as Trackable
+      return api<Trackable>('/api/trackables', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      })
     },
     onSuccess: invalidate,
   })
 
   const update = useMutation({
     mutationFn: async (trackable: Partial<Trackable> & { id: string }) => {
-      if (!isSupabaseConfigured) {
+      if (!isApiConfigured) {
         const existing = localStore.getTrackables(userId).find((t) => t.id === trackable.id)
         if (!existing) throw new Error('Not found')
         const updated = { ...existing, ...trackable }
         localStore.saveTrackable(updated)
         return updated
       }
-      const { data, error } = await supabase.from('trackables').update(trackable).eq('id', trackable.id).select().single()
-      if (error) throw error
-      return data as Trackable
+      const { id, ...rest } = trackable
+      return api<Trackable>(`/api/trackables/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(rest),
+      })
     },
     onSuccess: invalidate,
   })
 
   const remove = useMutation({
     mutationFn: async (id: string) => {
-      if (!isSupabaseConfigured) {
+      if (!isApiConfigured) {
         localStore.deleteTrackable(id)
         return
       }
-      const { error } = await supabase.from('trackables').delete().eq('id', id)
-      if (error) throw error
+      await api(`/api/trackables/${id}`, { method: 'DELETE' })
     },
     onSuccess: invalidate,
   })
 
   const reorder = useMutation({
     mutationFn: async (ordered: { id: string; sort_order: number }[]) => {
-      for (const item of ordered) {
-        if (!isSupabaseConfigured) {
+      if (!isApiConfigured) {
+        for (const item of ordered) {
           const t = localStore.getTrackables(userId).find((x) => x.id === item.id)
           if (t) localStore.saveTrackable({ ...t, sort_order: item.sort_order })
-        } else {
-          await supabase.from('trackables').update({ sort_order: item.sort_order }).eq('id', item.id)
         }
+        return
       }
+      await api('/api/trackables/reorder', {
+        method: 'POST',
+        body: JSON.stringify({ items: ordered }),
+      })
     },
     onSuccess: invalidate,
   })

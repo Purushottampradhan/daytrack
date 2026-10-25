@@ -1,12 +1,15 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-import type { User, Session } from '@supabase/supabase-js'
-import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+import { api, getToken, isApiConfigured, setToken } from '@/lib/api'
 import { localStore, type LocalSession } from '@/lib/localStore'
 import type { Profile } from '@/types'
 
+export interface AuthUser {
+  id: string
+  email: string
+}
+
 interface AuthContextValue {
-  user: User | LocalSession | null
-  session: Session | null
+  user: AuthUser | LocalSession | null
   profile: Profile | null
   loading: boolean
   isDemo: boolean
@@ -14,51 +17,65 @@ interface AuthContextValue {
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
   resetPassword: (email: string) => Promise<{ error: string | null }>
+  changePassword: (currentPassword: string, newPassword: string) => Promise<{ error: string | null }>
   refreshProfile: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | LocalSession | null>(null)
-  const [session, setSession] = useState<Session | null>(null)
+  const [user, setUser] = useState<AuthUser | LocalSession | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
-  const isDemo = !isSupabaseConfigured
+  const isDemo = !isApiConfigured
 
   const loadProfile = async (userId: string) => {
     if (isDemo) {
       setProfile(localStore.getProfile(userId))
       return
     }
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
-    if (data) setProfile(data as Profile)
+    const data = await api<Profile>('/api/profiles/me')
+    setProfile(data)
   }
 
   useEffect(() => {
-    if (isDemo) {
-      const local = localStore.getSession()
-      setUser(local)
-      if (local) loadProfile(local.id)
-      setLoading(false)
-      return
+    let cancelled = false
+
+    async function boot() {
+      if (isDemo) {
+        const local = localStore.getSession()
+        setUser(local)
+        if (local) await loadProfile(local.id)
+        if (!cancelled) setLoading(false)
+        return
+      }
+
+      const token = getToken()
+      if (!token) {
+        if (!cancelled) setLoading(false)
+        return
+      }
+
+      try {
+        const me = await api<{ user: AuthUser; profile: Profile }>('/api/auth/me')
+        if (cancelled) return
+        setUser(me.user)
+        setProfile(me.profile)
+      } catch {
+        setToken(null)
+        if (!cancelled) {
+          setUser(null)
+          setProfile(null)
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
     }
 
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s)
-      setUser(s?.user ?? null)
-      if (s?.user) loadProfile(s.user.id)
-      setLoading(false)
-    })
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s)
-      setUser(s?.user ?? null)
-      if (s?.user) loadProfile(s.user.id)
-      else setProfile(null)
-    })
-
-    return () => subscription.unsubscribe()
+    void boot()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const signUp = async (email: string, password: string, displayName: string) => {
@@ -81,12 +98,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { error: null }
     }
 
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { display_name: displayName } },
-    })
-    return { error: error?.message ?? null }
+    try {
+      const data = await api<{ token: string; user: AuthUser; profile: Profile }>('/api/auth/signup', {
+        method: 'POST',
+        body: JSON.stringify({ email, password, display_name: displayName }),
+      })
+      setToken(data.token)
+      setUser(data.user)
+      setProfile(data.profile)
+      return { error: null }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'Sign up failed' }
+    }
   }
 
   const signIn = async (email: string, password: string) => {
@@ -106,8 +129,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { error: null }
     }
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    return { error: error?.message ?? null }
+    try {
+      const data = await api<{ token: string; user: AuthUser; profile: Profile }>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      })
+      setToken(data.token)
+      setUser(data.user)
+      setProfile(data.profile)
+      return { error: null }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'Sign in failed' }
+    }
   }
 
   const signOut = async () => {
@@ -117,15 +150,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile(null)
       return
     }
-    await supabase.auth.signOut()
+    setToken(null)
+    setUser(null)
+    setProfile(null)
   }
 
-  const resetPassword = async (email: string) => {
+  const resetPassword = async (_email: string) => {
     if (isDemo) return { error: null }
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${import.meta.env.VITE_SITE_URL}/reset-password`,
-    })
-    return { error: error?.message ?? null }
+    return {
+      error: 'Email reset is not enabled. Sign in and change your password from Settings.',
+    }
+  }
+
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    if (isDemo) return { error: null }
+    try {
+      await api('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      })
+      return { error: null }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'Could not change password' }
+    }
   }
 
   const refreshProfile = async () => {
@@ -135,7 +185,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, session, profile, loading, isDemo, signUp, signIn, signOut, resetPassword, refreshProfile }}
+      value={{
+        user,
+        profile,
+        loading,
+        isDemo,
+        signUp,
+        signIn,
+        signOut,
+        resetPassword,
+        changePassword,
+        refreshProfile,
+      }}
     >
       {children}
     </AuthContext.Provider>
@@ -148,7 +209,7 @@ export function useAuth() {
   return ctx
 }
 
-export function getUserId(user: User | LocalSession | null): string | null {
+export function getUserId(user: AuthUser | LocalSession | null): string | null {
   if (!user) return null
   return user.id
 }
